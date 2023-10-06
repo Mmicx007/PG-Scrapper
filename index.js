@@ -1,22 +1,28 @@
 const express = require('express');
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const userAgent = require('user-agents');
 const Scrapper = require('./app');
-
-puppeteer.use(StealthPlugin());
+const { searchValidator, jsonValidator } = require('./middlewares/searchvalidator');
 
 const app = express();
 const port = 3000;
 
 app.use(express.json());
 
-app.post('/search', async (req, res) => {
-    const searchText = req.body.searchText;
+app.use(jsonValidator);
 
+app.post('/search', searchValidator, async (req, res) => {
+    const { searchText, stratPage, searchUpto } = req.body;
     try {
-        const listingsArray = await Scrapper.start(searchText);
-        res.json(listingsArray);
+        const listingsArray = await Scrapper.start(searchText,stratPage,searchUpto);
+        if (listingsArray.length > 0) {
+            const responseObj = {
+                data: listingsArray,
+                status: 'success',
+                count: listingsArray.length,
+            };
+            res.json(responseObj);
+        } else {
+            res.status(404).json({ error: 'No data found.' });
+        }
     } catch (error) {
         console.error('Error in search:', error);
         res.status(500).json({ error: 'An error occurred while processing your request.' });

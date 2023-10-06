@@ -4,11 +4,27 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const {executablePath} = require('puppeteer');
 const userAgent = require('user-agents');
 
+const args = [
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-accelerated-2d-canvas",
+    "--disable-gpu",
+    "--lang=en-US,en"
+  ];
+
 puppeteer.use(StealthPlugin());
 
 async function launchBrowser() {
     try {
-        const browser = await puppeteer.launch({headless: false, executablePath: executablePath()});
+        const browser = await puppeteer.launch({
+            headless: true, 
+            executablePath: executablePath(),
+            devtools: false,
+            ignoreHTTPSErrors: true,
+            args,
+            ignoreDefaultArgs: ["--disable-extensions"],
+        });
         const page = await browser.newPage();
         await page.setViewport({width: 1280, height: 800});
         await page.setUserAgent(userAgent.random().toString());
@@ -21,7 +37,7 @@ async function launchBrowser() {
 
 async function navigateToURL(page, url) {
     try {
-        await page.goto(url, { waitUntil: 'load', timeout: 60000 });
+        await page.goto(url, { waitUntil: 'networkidle0', timeout: 60000 });
         const errorPage = await page.$(".errorPage");
         if (errorPage) {
             throw new Error('Error page encountered');
@@ -40,8 +56,8 @@ async function performSearch(page,SearchText) {
         const buttonElement = (await button.$x('ancestor::button'))[0];
         const [response] = await Promise.all([
             page.waitForNavigation({ 
-                waitUntil: 'load', 
-                timeout: 60000 
+                waitUntil: 'networkidle0',
+                timeout: 60000
             }),
             buttonElement.click()
         ]);
@@ -51,13 +67,29 @@ async function performSearch(page,SearchText) {
     }
 }
 
-async function scrapeListings(page) {
+async function scrapeListings(page, stratPage, searchUpto) {
     let hasNextPage = true;
     const listingsArray = [];
-
+    let CheckPage = 1;
     while (hasNextPage) {
         try {
             const errorPage = await page.$(".errorPage");
+            const modalSelector = '#multipage-takeover-modal';
+            const modalElement = await page.$(modalSelector);
+            if (modalElement) {
+                const isModalVisible = await page.evaluate((modal) => {
+                    const computedStyle = window.getComputedStyle(modal);
+                    return computedStyle.getPropertyValue('display') !== 'none';
+                }, modalElement);
+                if (isModalVisible) {
+                    const closeButtonSelector = '.close-button.pgicon.pgicon-cancel';
+                    if (closeButtonSelector)
+                    {
+                        await page.click(closeButtonSelector);
+                    }
+                }
+            }
+
             const listingsData = await page.evaluate(() => {
                 const listings = document.querySelectorAll('.listing-description');
                     const listingsArray = [];
@@ -108,9 +140,11 @@ async function scrapeListings(page) {
                 }
             );
             listingsArray.push(... listingsData);
+
             const nextButton = await page.$('li.pagination-next a');
-            if(nextButton) {
+            if(nextButton && (CheckPage <= searchUpto) && searchUpto != 1) {
                 await Promise.all([page.waitForTimeout(1000), page.click('li.pagination-next a'),]);
+                CheckPage++;
             } else {
                 hasNextPage = false;
             }
@@ -120,18 +154,19 @@ async function scrapeListings(page) {
         }
 
     }
-    const filListing = listingsArray.filter(elem => {
-        return elem.title.toUpperCase().includes("Bishan Street".toUpperCase()) || elem.address.toUpperCase().includes("Bishan Street".toUpperCase());
-    })
-    return filListing;
+    return listingsArray;
 }
 
-async function start(SearchText) {
+async function start(searchText,stratPage, searchUpto) {
     try {
+
+        const BaseURL  = "https://www.propertyguru.com.sg/";
+        const NaviURL  = "property-for-sale/"+ stratPage +"?freetext="+ searchText +"&search=true";
+        const FinalURL = BaseURL + NaviURL;
         const {browser, page} = await launchBrowser();
-        await navigateToURL(page,'https://www.propertyguru.com.sg/');
-        await performSearch(page, SearchText );
-        const listingsArray = await scrapeListings(page);
+        await navigateToURL(page,FinalURL);
+        // await performSearch(page, searchText );
+        const listingsArray = await scrapeListings(page, stratPage, searchUpto);
         console.log(listingsArray);
         await browser.close();
         return listingsArray;
